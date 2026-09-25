@@ -12,7 +12,9 @@
     "typecheck": "next typegen && tsc --noEmit",
     "seed": "tsx --env-file=.env.local scripts/seed-companies.ts",
     "ingest": "tsx --env-file=.env.local scripts/ingest.ts",
-    "extract": "tsx --env-file=.env.local scripts/extract.ts"
+    "extract": "tsx --env-file=.env.local scripts/extract.ts",
+    "resume": "tsx --env-file=.env.local scripts/resume.ts",
+    "gaps": "tsx --env-file=.env.local scripts/gaps.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.128.0",

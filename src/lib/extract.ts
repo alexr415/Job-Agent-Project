@@ -71,13 +71,16 @@ const SAVE_EXTRACTION_TOOL: Anthropic.Tool = {
   },
 };
 
-const SYSTEM_PROMPT = `You extract structured data from software engineering job postings. The results are aggregated across hundreds of postings to find which skills are most in demand, so consistent naming matters more than anything else.
-
-Skill naming:
+// Shared with resume extraction, so postings and the resume name skills the same way.
+export const SKILL_NAMING_RULES = `Skill naming:
 - Use the canonical name of each technology: "Kubernetes" not "K8s", "Go" not "Golang", "JavaScript" not "JS", "PostgreSQL" not "Postgres", "AWS" not "Amazon Web Services", "Node.js", "React", "C++", "CI/CD".
 - Split lists into separate items: "Python/Java/Go" becomes "Python", "Java", "Go".
 - Broad technical areas are fine when the posting names them: "Distributed Systems", "Machine Learning", "System Design", "Data Structures & Algorithms".
-- Leave out soft skills (communication, teamwork, ownership), degrees, and years of experience; those aren't skills to study.
+- Leave out soft skills (communication, teamwork, ownership), degrees, and years of experience; those aren't skills to study.`;
+
+const SYSTEM_PROMPT = `You extract structured data from software engineering job postings. The results are aggregated across hundreds of postings to find which skills are most in demand, so consistent naming matters more than anything else.
+
+${SKILL_NAMING_RULES}
 - Only include what the posting actually says. Don't infer skills it doesn't mention.`;
 
 function cleanList(items: string[]): string[] {
