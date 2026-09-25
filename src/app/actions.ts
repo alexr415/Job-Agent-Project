@@ -51,7 +51,7 @@ export async function saveSchedule(_prev: ActionResult | null, formData: FormDat
 }
 
 export type StageActionResult =
-  | { ok: true; runId: number; summary: Record<string, unknown> }
+  | { ok: true; runId: number | null; summary: Record<string, unknown> }
   | { ok: false; error: string };
 
 // Runs one pipeline stage. The dashboard calls this once per stage in order,

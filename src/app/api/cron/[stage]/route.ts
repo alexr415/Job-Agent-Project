@@ -1,6 +1,6 @@
 import type { NextRequest } from "next/server";
 import { isStage, runStage } from "@/lib/pipeline";
-import { getPipelineSettings, scheduledRunDue } from "@/lib/settings";
+import { getPipelineSettings, stagesDueToday } from "@/lib/settings";
 import { errorMessage } from "@/lib/errors";
 
 // Vercel's maximum on the Hobby plan. Stages stop starting new work well before this.
@@ -21,13 +21,16 @@ export async function GET(request: NextRequest, ctx: RouteContext<"/api/cron/[st
   if (!isStage(stage)) return Response.json({ error: `Unknown stage "${stage}"` }, { status: 404 });
 
   try {
-    const schedule = scheduledRunDue(await getPipelineSettings());
-    if (!schedule.due) {
-      console.log(`[cron] ${stage} skipped: ${schedule.reason}`);
-      return Response.json({ stage, skipped: schedule.reason });
+    const settings = await getPipelineSettings();
+    const due = stagesDueToday(settings);
+    if (!due.includes(stage)) {
+      const reason = settings.frequency === "off" ? "schedule is off" : `not scheduled today (${settings.frequency})`;
+      console.log(`[cron] ${stage} skipped: ${reason}`);
+      return Response.json({ stage, skipped: reason });
     }
 
-    const result = await runStage(stage);
+    // The last stage due today closes the day's run.
+    const result = await runStage(stage, { closeRun: due.at(-1) === stage });
     console.log(`[cron] ${stage} finished`, JSON.stringify(result));
     return Response.json(result);
   } catch (err) {

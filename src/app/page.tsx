@@ -3,8 +3,11 @@ import { connection } from "next/server";
 import { isAdmin, passwordConfigured } from "@/lib/auth";
 import { getDashboardData, type Run, type SkillBar } from "@/lib/dashboard";
 import { errorMessage } from "@/lib/errors";
+import { daysSincePosted, postedDate, requestTime, WEEK_DAYS } from "@/lib/freshness";
+import { getOpenJobs, type Job } from "@/lib/jobs";
 import { getPipelineSettings, type PipelineSettings } from "@/lib/settings";
 import { SkillDemandChart, SkillTrendChart } from "./components/charts";
+import { PostedBadge } from "./components/posted-badge";
 import { ReportView } from "./components/report-view";
 import { PipelineControls } from "./pipeline-controls";
 
@@ -86,6 +89,55 @@ function SkillTable({ skills, empty }: { skills: SkillBar[]; empty: string }) {
   );
 }
 
+// The newest roles, so the dashboard leads with what to apply to today.
+function FreshOpenings({ jobs, total, now }: { jobs: Job[]; total: number; now: number }) {
+  if (jobs.length === 0) {
+    return (
+      <p className="text-sm text-neutral-500">
+        Nothing posted in the last week.{" "}
+        <Link href="/jobs" className="underline underline-offset-2">
+          Browse all {total} open roles
+        </Link>
+        .
+      </p>
+    );
+  }
+  return (
+    <>
+      <ul className="divide-y divide-neutral-100 dark:divide-neutral-900">
+        {jobs.map((job) => {
+          const have = job.requiredSkills.length - job.missingSkills.length;
+          return (
+            <li key={job.key} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2.5 text-sm">
+              <PostedBadge job={job} now={now} />
+              <a
+                href={job.locations[0]?.url ?? "/jobs"}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-medium hover:underline"
+              >
+                {job.title}
+              </a>
+              <span className="text-neutral-500 dark:text-neutral-400">
+                {job.company} · {job.locations[0]?.location}
+                {job.locations.length > 1 && ` +${job.locations.length - 1}`}
+              </span>
+              {job.analyzed && job.requiredSkills.length > 0 && (
+                <span className="text-xs text-neutral-500 dark:text-neutral-400 sm:ml-auto">
+                  {have}/{job.requiredSkills.length} skills
+                </span>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+      <Link href="/jobs" className="mt-3 inline-block text-sm text-blue-700 hover:underline dark:text-blue-400">
+        See all {total} open roles →
+      </Link>
+    </>
+  );
+}
+
 function RunHistory({ runs }: { runs: Run[] }) {
   if (runs.length === 0) return <p className="text-sm text-neutral-500">No runs yet.</p>;
   return (
@@ -132,15 +184,21 @@ function RunHistory({ runs }: { runs: Run[] }) {
 export default async function Home() {
   // Render on every request, never at build time: the data changes with every run.
   await connection();
-  const [data, admin, settingsResult] = await Promise.all([
+  const now = requestTime();
+  const [data, admin, settingsResult, jobsResult] = await Promise.all([
     getDashboardData(),
     isAdmin(),
     getPipelineSettings().then(
       (settings): { settings: PipelineSettings; error: null } => ({ settings, error: null }),
       (err: unknown) => ({ settings: null, error: errorMessage(err) }),
     ),
+    getOpenJobs().catch(() => null),
   ]);
   const { analysis, trend, latestReport, runs, companies } = data;
+  const allJobs = jobsResult?.jobs ?? [];
+  const postedThisWeek = allJobs
+    .filter((job) => daysSincePosted(job, now) <= WEEK_DAYS)
+    .sort((a, b) => postedDate(b).localeCompare(postedDate(a)));
   const lastRun = runs[0];
   const top20Covered = analysis?.topSkills.filter((s) => s.onResume).length ?? 0;
 
@@ -156,9 +214,9 @@ export default async function Home() {
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Stat
-          label="Open roles"
-          value={analysis ? String(analysis.totalRoles) : "–"}
-          detail="Browse and apply →"
+          label="Posted this week"
+          value={jobsResult ? String(postedThisWeek.length) : "–"}
+          detail={`of ${allJobs.length} open roles · browse →`}
           href="/jobs"
         />
         <Stat
@@ -176,6 +234,17 @@ export default async function Home() {
           detail={lastRun && `${lastRun.status} · $${Number(lastRun.cost_usd).toFixed(2)}`}
         />
       </div>
+
+      <Card
+        title="Fresh openings"
+        subtitle="Posted in the last week, newest first. Applying early gives you the best shot."
+      >
+        {jobsResult ? (
+          <FreshOpenings jobs={postedThisWeek.slice(0, 10)} total={allJobs.length} now={now} />
+        ) : (
+          <p className="text-sm text-red-600 dark:text-red-400">Couldn&apos;t load open roles.</p>
+        )}
+      </Card>
 
       {analysis ? (
         <>

@@ -5,12 +5,14 @@ import { runScout } from "./scout";
 import { supabase } from "./supabase";
 import { errorMessage } from "./errors";
 
-// The weekly pipeline runs as separate stages, each in its own function
-// invocation, because together they take longer than Vercel's 300s limit.
-// Stages share one `runs` row: scout opens it, later stages add their
-// numbers, and report closes it.
-export const STAGES = ["scout", "ingest", "extract", "report"] as const;
-export type Stage = (typeof STAGES)[number];
+import { PIPELINE_STAGES, type Stage } from "./schedule";
+
+// The pipeline runs as separate stages, each in its own function invocation,
+// because together they take longer than Vercel's 300s limit. Stages share
+// one `runs` row: the first stage of the day opens it, later stages add
+// their numbers, and the last stage of the day closes it.
+export const STAGES = PIPELINE_STAGES;
+export type { Stage };
 
 export function isStage(value: string): value is Stage {
   return (STAGES as readonly string[]).includes(value);
@@ -30,19 +32,41 @@ type RunTotals = {
   cost_usd: number;
 };
 
+async function findOpenRun(): Promise<number | null> {
+  const { data, error } = await supabase
+    .from("runs")
+    .select("id")
+    .eq("status", "running")
+    .gte("started_at", new Date(Date.now() - RUN_WINDOW_MS).toISOString())
+    .order("started_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  return data?.id ?? null;
+}
+
+async function countPendingExtractions(): Promise<number> {
+  const { count, error } = await supabase
+    .from("postings")
+    .select("id, extracted_fields!left(posting_id)", { count: "exact", head: true })
+    .is("extracted_fields", null);
+  if (error) throw error;
+  return count ?? 0;
+}
+
+async function closeRun(runId: number): Promise<void> {
+  const { error } = await supabase
+    .from("runs")
+    .update({ status: "succeeded", finished_at: new Date().toISOString() })
+    .eq("id", runId);
+  if (error) throw error;
+}
+
 async function openRun(stage: Stage, runId?: number): Promise<number> {
   if (runId !== undefined) return runId;
   if (stage !== "scout") {
-    const { data, error } = await supabase
-      .from("runs")
-      .select("id")
-      .eq("status", "running")
-      .gte("started_at", new Date(Date.now() - RUN_WINDOW_MS).toISOString())
-      .order("started_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    if (error) throw error;
-    if (data) return data.id;
+    const open = await findOpenRun();
+    if (open !== null) return open;
   }
   // Scout always starts a new run; other stages start one if scout didn't run or failed.
   // Any run still marked running is abandoned at this point (a skipped stage,
@@ -77,13 +101,26 @@ async function addToRun(runId: number, delta: Partial<RunTotals>): Promise<void>
 
 export interface StageResult {
   stage: Stage;
-  runId: number;
+  runId: number | null; // null when the stage had nothing to do and opened no run
   summary: Record<string, unknown>;
 }
 
 // Runs one stage. Cron invocations omit runId and join (or open) the day's
 // run; the dashboard's manual run passes the runId the scout stage returned.
-export async function runStage(stage: Stage, options: { runId?: number } = {}): Promise<StageResult> {
+// closeRun marks the run succeeded afterwards: the cron route sets it on the
+// last stage due that day. The report stage always closes the run.
+export async function runStage(
+  stage: Stage,
+  options: { runId?: number; closeRun?: boolean } = {},
+): Promise<StageResult> {
+  // A second extraction pass with the day's run already closed and nothing
+  // left to extract has no work, so it shouldn't open an empty run.
+  if (stage === "extract" && options.runId === undefined && (await findOpenRun()) === null) {
+    if ((await countPendingExtractions()) === 0) {
+      return { stage, runId: null, summary: { extracted: 0, failed: 0, remaining: 0, costUsd: 0 } };
+    }
+  }
+
   const runId = await openRun(stage, options.runId);
   const deadline = Date.now() + STAGE_TIME_BUDGET_MS;
 
@@ -99,10 +136,12 @@ export async function runStage(stage: Stage, options: { runId?: number } = {}): 
           cost_usd: r.costUsd,
         });
         summary = { added: r.added.map((c) => c.name), stopReason: r.stopReason, costUsd: r.costUsd };
+        if (options.closeRun) await closeRun(runId);
         break;
       }
       case "ingest": {
         const results = await ingestAll(runId);
+        if (options.closeRun) await closeRun(runId);
         summary = {
           companies: results.length,
           entryLevel: results.reduce((sum, r) => sum + r.entryLevel, 0),
@@ -120,17 +159,15 @@ export async function runStage(stage: Stage, options: { runId?: number } = {}): 
           cost_usd: r.costUsd,
         });
         summary = { extracted: r.succeeded, failed: r.failures.length, remaining: r.remaining, costUsd: r.costUsd };
+        // If the deadline left postings unextracted, keep the run open for the next pass.
+        if (options.closeRun && r.remaining === 0) await closeRun(runId);
         break;
       }
       case "report": {
         const r = await generateReport({ runId });
         await addToRun(runId, { input_tokens: r.inputTokens, output_tokens: r.outputTokens, cost_usd: r.costUsd });
-        // The report is the last stage, so it closes the run.
-        const { error } = await supabase
-          .from("runs")
-          .update({ status: "succeeded", finished_at: new Date().toISOString() })
-          .eq("id", runId);
-        if (error) throw error;
+        // The report is always the last stage, so it closes the run.
+        await closeRun(runId);
         summary = { reportId: r.reportId, costUsd: r.costUsd };
         break;
       }

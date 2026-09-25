@@ -3,18 +3,13 @@
 import { useRouter } from "next/navigation";
 import { useActionState, useState } from "react";
 import { login, logout, runPipelineStage, saveSchedule } from "./actions";
-import { WEEKDAYS, type Frequency, type PipelineSettings } from "@/lib/schedule";
+import { scheduleDescription, WEEKDAYS, type Frequency, type PipelineSettings } from "@/lib/schedule";
 
 const buttonClass =
   "rounded-lg bg-neutral-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-neutral-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-white dark:text-neutral-900 dark:hover:bg-neutral-200";
 const inputClass =
   "rounded-lg border border-neutral-300 bg-transparent px-3 py-2 text-sm dark:border-neutral-700";
 
-function scheduleDescription(frequency: Frequency, weeklyDay: number): string {
-  if (frequency === "off") return "Scheduled runs are off. Use Run now to run it manually.";
-  const day = frequency === "daily" ? "every day" : `every ${WEEKDAYS[weeklyDay]}`;
-  return `Runs ${day}, in stages from 12:00 to 18:00 UTC.`;
-}
 
 function LoginForm() {
   const [state, action, pending] = useActionState(login, null);
@@ -87,8 +82,7 @@ function ScheduleForm({ settings }: { settings: PipelineSettings }) {
         </button>
       </div>
       <p className="text-sm text-neutral-500 dark:text-neutral-400">
-        {scheduleDescription(frequency, weeklyDay)}
-        {frequency === "daily" && " About $0.50 per run."}
+        {scheduleDescription({ frequency, weekly_day: weeklyDay })}
       </p>
       {state && !state.ok && <p className="text-sm text-red-600 dark:text-red-400">{state.error}</p>}
       {state?.ok && !changed && <p className="text-sm text-emerald-600 dark:text-emerald-400">Schedule saved.</p>}
@@ -157,7 +151,7 @@ function RunNow() {
           router.refresh();
           return;
         }
-        runId = result.runId;
+        runId = result.runId ?? runId;
         if (stage !== "extract") {
           update(i, { status: "done", detail: describe(stage, result.summary) });
           break;
@@ -233,7 +227,7 @@ export function PipelineControls({
   if (!passwordConfigured) {
     return (
       <p className="text-sm text-neutral-500 dark:text-neutral-400">
-        {scheduleDescription(settings.frequency, settings.weekly_day)} Set <code>DASHBOARD_PASSWORD</code> to
+        {scheduleDescription(settings)} Set <code>DASHBOARD_PASSWORD</code> to
         change the schedule or run it from here.
       </p>
     );
@@ -242,7 +236,7 @@ export function PipelineControls({
     return (
       <div className="space-y-3">
         <p className="text-sm text-neutral-500 dark:text-neutral-400">
-          {scheduleDescription(settings.frequency, settings.weekly_day)} Sign in to change the schedule or run it
+          {scheduleDescription(settings)} Sign in to change the schedule or run it
           now.
         </p>
         <LoginForm />

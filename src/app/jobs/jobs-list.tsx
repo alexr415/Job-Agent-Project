@@ -1,10 +1,14 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { daysSincePosted, FRESH_DAYS, MONTH_DAYS, postedDate, WEEK_DAYS } from "@/lib/freshness";
 import type { Job } from "@/lib/jobs";
+import { PostedBadge } from "../components/posted-badge";
 
 // Filtering and sorting run in the browser: a few hundred roles is small
 // enough to send at once, and it keeps every filter change instant.
+// Roles are grouped by how recently they were posted, because applying early
+// is the biggest edge this tool can give.
 
 const LOCATION_PRESETS: { label: string; pattern: RegExp }[] = [
   {
@@ -16,7 +20,18 @@ const LOCATION_PRESETS: { label: string; pattern: RegExp }[] = [
   { label: "New York", pattern: /new york|nyc|brooklyn/i },
 ];
 
-type Sort = "found" | "posted" | "match";
+const SECTIONS = [
+  { title: `Posted in the last ${FRESH_DAYS} days`, note: "Apply to these first.", maxDays: FRESH_DAYS },
+  { title: "Posted this week", note: null, maxDays: WEEK_DAYS },
+  { title: "Posted this month", note: null, maxDays: MONTH_DAYS },
+  {
+    title: "Older than a month",
+    note: "Often evergreen postings or roles already deep into interviews.",
+    maxDays: Infinity,
+  },
+];
+
+type Sort = "newest" | "match";
 
 const inputClass =
   "rounded-lg border border-neutral-300 bg-transparent px-3 py-2 text-sm dark:border-neutral-700";
@@ -26,11 +41,6 @@ const chipClass = (active: boolean) =>
       ? "border-neutral-900 bg-neutral-900 text-white dark:border-white dark:bg-white dark:text-neutral-900"
       : "border-neutral-300 text-neutral-600 hover:border-neutral-500 dark:border-neutral-700 dark:text-neutral-400"
   }`;
-
-function formatDay(iso: string | null): string | null {
-  if (!iso) return null;
-  return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" });
-}
 
 // Share of required skills the resume covers; unanalyzed roles sort last.
 function matchScore(job: Job): number {
@@ -46,14 +56,14 @@ function experienceLabel(job: Job): string {
   return `${job.yearsExperience}+ ${job.yearsExperience === 1 ? "year" : "years"}`;
 }
 
-function JobCard({ job }: { job: Job }) {
+function JobCard({ job, now }: { job: Job; now: number }) {
   const [showAll, setShowAll] = useState(false);
   const visible = showAll ? job.locations : job.locations.slice(0, 4);
   const have = job.requiredSkills.length - job.missingSkills.length;
 
   return (
     <li className="rounded-xl border border-neutral-200 p-4 dark:border-neutral-800">
-      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
         <h3 className="font-medium">
           {job.locations[0]?.url ? (
             <a href={job.locations[0].url} target="_blank" rel="noopener noreferrer" className="hover:underline">
@@ -64,9 +74,10 @@ function JobCard({ job }: { job: Job }) {
           )}
         </h3>
         <span className="text-sm text-neutral-500 dark:text-neutral-400">{job.company}</span>
+        <PostedBadge job={job} now={now} />
         {job.isNew && (
-          <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">
-            New
+          <span className="rounded-full border border-emerald-300 px-2 py-0.5 text-xs text-emerald-800 dark:border-emerald-800 dark:text-emerald-300">
+            Just found
           </span>
         )}
       </div>
@@ -101,15 +112,7 @@ function JobCard({ job }: { job: Job }) {
         )}
       </p>
 
-      <p className="mt-1.5 text-xs text-neutral-500 dark:text-neutral-400">
-        {[
-          experienceLabel(job),
-          job.postedAt && `Posted ${formatDay(job.postedAt)}`,
-          `Found ${formatDay(job.firstSeenAt)}`,
-        ]
-          .filter(Boolean)
-          .join(" · ")}
-      </p>
+      <p className="mt-1.5 text-xs text-neutral-500 dark:text-neutral-400">{experienceLabel(job)}</p>
 
       {job.analyzed && job.requiredSkills.length > 0 && (
         <div className="mt-2.5 text-sm">
@@ -135,19 +138,40 @@ function JobCard({ job }: { job: Job }) {
   );
 }
 
-export function JobsList({ jobs }: { jobs: Job[] }) {
+function JobGroup({ title, note, jobs, now }: { title: string; note: string | null; jobs: Job[]; now: number }) {
+  return (
+    <section>
+      {title && (
+        <h2 className="text-sm font-semibold">
+          {title} <span className="font-normal text-neutral-500">({jobs.length})</span>
+        </h2>
+      )}
+      {note && <p className="mt-0.5 text-xs text-neutral-500 dark:text-neutral-400">{note}</p>}
+      {jobs.length === 0 ? (
+        <p className="mt-2 text-sm text-neutral-500">None right now.</p>
+      ) : (
+        <ul className="mt-3 space-y-3">
+          {jobs.map((job) => (
+            <JobCard key={job.key} job={job} now={now} />
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+export function JobsList({ jobs, now }: { jobs: Job[]; now: number }) {
   const [query, setQuery] = useState("");
   const [location, setLocation] = useState("");
   const [preset, setPreset] = useState<string | null>(null);
   const [company, setCompany] = useState("");
-  const [newOnly, setNewOnly] = useState(false);
-  // Recently posted first by default: applying early matters more than anything else here.
-  const [sort, setSort] = useState<Sort>("posted");
+  const [justFound, setJustFound] = useState(false);
+  const [sort, setSort] = useState<Sort>("newest");
 
   const companies = useMemo(() => [...new Set(jobs.map((j) => j.company))].sort(), [jobs]);
-  const newCount = jobs.filter((j) => j.isNew).length;
+  const justFoundCount = jobs.filter((j) => j.isNew).length;
 
-  const shown = useMemo(() => {
+  const groups = useMemo(() => {
     const q = query.trim().toLowerCase();
     const loc = location.trim().toLowerCase();
     const presetPattern = LOCATION_PRESETS.find((p) => p.label === preset)?.pattern;
@@ -155,21 +179,28 @@ export function JobsList({ jobs }: { jobs: Job[] }) {
     const filtered = jobs.filter((job) => {
       if (q && !`${job.title} ${job.company}`.toLowerCase().includes(q)) return false;
       if (company && job.company !== company) return false;
-      if (newOnly && !job.isNew) return false;
+      if (justFound && !job.isNew) return false;
       const places = job.locations.map((l) => l.location);
       if (presetPattern && !places.some((p) => presetPattern.test(p))) return false;
       if (loc && !places.some((p) => p.toLowerCase().includes(loc))) return false;
       return true;
     });
 
-    const byDate = (a: string | null, b: string | null) => (b ?? "").localeCompare(a ?? "");
-    const day = (iso: string) => iso.slice(0, 10); // roles found in the same run tie, then fall back to posted date
-    return filtered.sort((a, b) => {
-      if (sort === "match") return matchScore(b) - matchScore(a) || byDate(a.postedAt, b.postedAt);
-      if (sort === "posted") return byDate(a.postedAt, b.postedAt);
-      return byDate(day(a.firstSeenAt), day(b.firstSeenAt)) || byDate(a.postedAt, b.postedAt);
+    const newestFirst = (a: Job, b: Job) => postedDate(b).localeCompare(postedDate(a));
+    filtered.sort(sort === "match" ? (a, b) => matchScore(b) - matchScore(a) || newestFirst(a, b) : newestFirst);
+
+    return SECTIONS.map((section, i) => {
+      const minDays = i === 0 ? -1 : SECTIONS[i - 1].maxDays; // each section starts where the previous ended
+      const inSection = filtered.filter((job) => {
+        const days = daysSincePosted(job, now);
+        return days > minDays && days <= section.maxDays;
+      });
+      return { ...section, jobs: inSection };
     });
-  }, [jobs, query, location, preset, company, newOnly, sort]);
+  }, [jobs, now, query, location, preset, company, justFound, sort]);
+
+  const total = groups.reduce((n, g) => n + g.jobs.length, 0);
+  const [recent, older] = [groups.slice(0, -1), groups.at(-1)!];
 
   return (
     <div>
@@ -205,13 +236,12 @@ export function JobsList({ jobs }: { jobs: Job[] }) {
             ))}
           </select>
           <select
-            aria-label="Sort by"
+            aria-label="Sort within each group"
             value={sort}
             onChange={(e) => setSort(e.target.value as Sort)}
             className={inputClass}
           >
-            <option value="posted">Recently posted</option>
-            <option value="found">Newest found</option>
+            <option value="newest">Newest first</option>
             <option value="match">Best match for you</option>
           </select>
         </div>
@@ -229,27 +259,35 @@ export function JobsList({ jobs }: { jobs: Job[] }) {
           ))}
           <button
             type="button"
-            aria-pressed={newOnly}
-            onClick={() => setNewOnly(!newOnly)}
-            className={chipClass(newOnly)}
+            aria-pressed={justFound}
+            onClick={() => setJustFound(!justFound)}
+            className={chipClass(justFound)}
+            title="Roles that first appeared in the latest run"
           >
-            New only ({newCount})
+            Just found ({justFoundCount})
           </button>
         </div>
       </div>
 
-      <p className="mt-4 mb-3 text-sm text-neutral-500 dark:text-neutral-400" aria-live="polite">
-        Showing {shown.length} of {jobs.length} roles
+      <p className="mt-4 text-sm text-neutral-500 dark:text-neutral-400" aria-live="polite">
+        Showing {total} of {jobs.length} roles
       </p>
-      {shown.length === 0 ? (
-        <p className="text-sm text-neutral-500">No roles match these filters.</p>
-      ) : (
-        <ul className="space-y-3">
-          {shown.map((job) => (
-            <JobCard key={job.key} job={job} />
-          ))}
-        </ul>
-      )}
+
+      <div className="mt-4 space-y-8">
+        {recent.map((g) => (
+          <JobGroup key={g.title} title={g.title} note={g.note} jobs={g.jobs} now={now} />
+        ))}
+        {older.jobs.length > 0 && (
+          <details>
+            <summary className="cursor-pointer text-sm font-semibold">
+              {older.title} <span className="font-normal text-neutral-500">({older.jobs.length})</span>
+            </summary>
+            <div className="mt-3">
+              <JobGroup title="" note={older.note} jobs={older.jobs} now={now} />
+            </div>
+          </details>
+        )}
+      </div>
     </div>
   );
 }

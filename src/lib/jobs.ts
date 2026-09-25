@@ -63,7 +63,12 @@ export async function getOpenJobs(): Promise<{ jobs: Job[]; latestRunAt: string 
 
     const company = p.companies?.name ?? "Unknown";
     const key = `${company}:${p.title.toLowerCase().replace(/\s+/g, " ").trim()}`;
-    const location = { location: p.location ?? "Location not listed", url: p.url };
+    // Some boards use placeholder text like "N/A" instead of leaving the location empty.
+    const place = p.location?.trim();
+    const location = {
+      location: place && !/^(n\/?a|tbd|none|-)$/i.test(place) ? place : "Location not listed",
+      url: p.url,
+    };
     const existing = groups.get(key);
 
     if (existing) {
@@ -90,6 +95,15 @@ export async function getOpenJobs(): Promise<{ jobs: Job[]; latestRunAt: string 
     });
   }
 
-  for (const job of groups.values()) job.locations.sort((a, b) => a.location.localeCompare(b.location));
+  for (const job of groups.values()) {
+    job.locations.sort((a, b) => a.location.localeCompare(b.location));
+    // Number repeated labels ("Location not listed (2)") so each link is distinguishable.
+    const seen = new Map<string, number>();
+    for (const loc of job.locations) {
+      const n = (seen.get(loc.location) ?? 0) + 1;
+      seen.set(loc.location, n);
+      if (n > 1) loc.location = `${loc.location} (${n})`;
+    }
+  }
   return { jobs: [...groups.values()], latestRunAt: latestRun.started_at };
 }
