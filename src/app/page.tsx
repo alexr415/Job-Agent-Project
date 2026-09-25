@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { connection } from "next/server";
 import { isAdmin, passwordConfigured } from "@/lib/auth";
 import { getDashboardData, type Run, type SkillBar } from "@/lib/dashboard";
@@ -36,13 +37,21 @@ function Card({ title, subtitle, children }: { title: string; subtitle?: string;
   );
 }
 
-function Stat({ label, value, detail }: { label: string; value: string; detail?: string }) {
-  return (
-    <div className="rounded-xl border border-neutral-200 p-4 dark:border-neutral-800">
+function Stat({ label, value, detail, href }: { label: string; value: string; detail?: string; href?: string }) {
+  const body = (
+    <>
       <p className="text-xs font-medium uppercase tracking-wide text-neutral-500">{label}</p>
       <p className="mt-1 text-2xl font-semibold tabular-nums">{value}</p>
       {detail && <p className="mt-0.5 text-xs text-neutral-500 dark:text-neutral-400">{detail}</p>}
-    </div>
+    </>
+  );
+  const className = "rounded-xl border border-neutral-200 p-4 dark:border-neutral-800";
+  return href ? (
+    <Link href={href} className={`${className} transition hover:border-neutral-400 dark:hover:border-neutral-600`}>
+      {body}
+    </Link>
+  ) : (
+    <div className={className}>{body}</div>
   );
 }
 
@@ -138,7 +147,7 @@ export default async function Home() {
   return (
     <main className="mx-auto w-full max-w-5xl flex-1 space-y-6 px-4 py-10 sm:px-6">
       <header>
-        <h1 className="text-2xl font-semibold tracking-tight">SWE Job Market Agent</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
         <p className="mt-1 text-sm text-neutral-500 dark:text-neutral-400">
           Open entry-level software roles (new grad, or 2 or fewer years of experience), the skills they ask for,
           and how your resume compares.
@@ -146,7 +155,12 @@ export default async function Home() {
       </header>
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Stat label="Open roles" value={analysis ? String(analysis.totalRoles) : "–"} detail="Each role counted once" />
+        <Stat
+          label="Open roles"
+          value={analysis ? String(analysis.totalRoles) : "–"}
+          detail="Browse and apply →"
+          href="/jobs"
+        />
         <Stat
           label="Companies watched"
           value={String(companies.total)}
