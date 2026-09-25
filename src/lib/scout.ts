@@ -3,6 +3,7 @@ import { anthropic, REASONING_MODEL } from "./anthropic";
 import { fetchPostings, type AtsProvider } from "./ats";
 import { entryLevelReason, isEngineeringTitle } from "./entry-level";
 import { supabase } from "./supabase";
+import { errorMessage } from "./errors";
 
 // Limits that hold no matter what the model decides.
 const MAX_COMPANIES_PER_DAY = 5; // across all scout runs in a UTC day
@@ -157,7 +158,7 @@ export async function runScout(options: { deadline?: number } = {}): Promise<Sco
         sample_entry_level_titles: entryLevel.slice(0, 5).map((p) => p.title),
       };
     } catch (err) {
-      return { exists: false, error: err instanceof Error ? err.message : String(err) };
+      return { exists: false, error: errorMessage(err) };
     }
   }
 

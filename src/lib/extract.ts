@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { anthropic, EXTRACTION_MODEL } from "./anthropic";
 import { supabase } from "./supabase";
+import { errorMessage } from "./errors";
 
 // Claude Haiku 4.5 pricing, USD per million tokens.
 const INPUT_COST_PER_MTOK = 1;
@@ -203,7 +204,7 @@ export async function runExtraction(options: { limit?: number; deadline?: number
         result.succeeded++;
         return;
       } catch (err) {
-        lastError = err instanceof Error ? err.message : JSON.stringify(err);
+        lastError = errorMessage(err);
         if (err instanceof Anthropic.BadRequestError || err instanceof Anthropic.AuthenticationError) break;
       }
     }

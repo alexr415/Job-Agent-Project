@@ -3,6 +3,7 @@ import { ingestAll } from "./ingest";
 import { generateReport } from "./report";
 import { runScout } from "./scout";
 import { supabase } from "./supabase";
+import { errorMessage } from "./errors";
 
 // The weekly pipeline runs as separate stages, each in its own function
 // invocation, because together they take longer than Vercel's 300s limit.
@@ -29,7 +30,8 @@ type RunTotals = {
   cost_usd: number;
 };
 
-async function openRun(stage: Stage): Promise<number> {
+async function openRun(stage: Stage, runId?: number): Promise<number> {
+  if (runId !== undefined) return runId;
   if (stage !== "scout") {
     const { data, error } = await supabase
       .from("runs")
@@ -43,6 +45,14 @@ async function openRun(stage: Stage): Promise<number> {
     if (data) return data.id;
   }
   // Scout always starts a new run; other stages start one if scout didn't run or failed.
+  // Any run still marked running is abandoned at this point (a skipped stage,
+  // or a manual run whose page was closed), so close it out.
+  const { error: closeError } = await supabase
+    .from("runs")
+    .update({ status: "failed", finished_at: new Date().toISOString(), error: "Superseded by a newer run" })
+    .eq("status", "running");
+  if (closeError) throw closeError;
+
   const { data, error } = await supabase.from("runs").insert({}).select("id").single();
   if (error) throw error;
   return data.id;
@@ -71,8 +81,10 @@ export interface StageResult {
   summary: Record<string, unknown>;
 }
 
-export async function runStage(stage: Stage): Promise<StageResult> {
-  const runId = await openRun(stage);
+// Runs one stage. Cron invocations omit runId and join (or open) the day's
+// run; the dashboard's manual run passes the runId the scout stage returned.
+export async function runStage(stage: Stage, options: { runId?: number } = {}): Promise<StageResult> {
+  const runId = await openRun(stage, options.runId);
   const deadline = Date.now() + STAGE_TIME_BUDGET_MS;
 
   try {
@@ -130,7 +142,7 @@ export async function runStage(stage: Stage): Promise<StageResult> {
       .update({
         status: "failed",
         finished_at: new Date().toISOString(),
-        error: `${stage}: ${err instanceof Error ? err.message : String(err)}`,
+        error: `${stage}: ${errorMessage(err)}`,
       })
       .eq("id", runId);
     throw err;

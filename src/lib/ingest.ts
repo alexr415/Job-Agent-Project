@@ -1,6 +1,7 @@
 import { fetchPostings, type AtsProvider, type NormalizedPosting } from "./ats";
 import { entryLevelReason } from "./entry-level";
 import { supabase } from "./supabase";
+import { errorMessage } from "./errors";
 
 interface Company {
   id: number;
@@ -80,7 +81,7 @@ async function ingestCompany(company: Company, runId: number): Promise<CompanyIn
     };
   } catch (err) {
     // One broken board shouldn't sink the whole run.
-    const message = err instanceof Error ? err.message : String(err);
+    const message = errorMessage(err);
     return { company: company.name, totalJobs: 0, entryLevel: 0, byTitle: 0, byYears: 0, new: 0, error: message };
   }
 }
@@ -130,7 +131,7 @@ export async function runIngestion(): Promise<{ runId: number; results: CompanyI
   } catch (err) {
     await supabase
       .from("runs")
-      .update({ finished_at: new Date().toISOString(), status: "failed", error: String(err) })
+      .update({ finished_at: new Date().toISOString(), status: "failed", error: errorMessage(err) })
       .eq("id", run.id);
     throw err;
   }
