@@ -11,7 +11,8 @@
     "check-db": "tsx --env-file=.env.local scripts/check-db.ts",
     "typecheck": "next typegen && tsc --noEmit",
     "seed": "tsx --env-file=.env.local scripts/seed-companies.ts",
-    "ingest": "tsx --env-file=.env.local scripts/ingest.ts"
+    "ingest": "tsx --env-file=.env.local scripts/ingest.ts",
+    "extract": "tsx --env-file=.env.local scripts/extract.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.128.0",
