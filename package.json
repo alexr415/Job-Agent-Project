@@ -15,7 +15,8 @@
     "extract": "tsx --env-file=.env.local scripts/extract.ts",
     "resume": "tsx --env-file=.env.local scripts/resume.ts",
     "gaps": "tsx --env-file=.env.local scripts/gaps.ts",
-    "report": "tsx --env-file=.env.local scripts/report.ts"
+    "report": "tsx --env-file=.env.local scripts/report.ts",
+    "scout": "tsx --env-file=.env.local scripts/scout.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.128.0",

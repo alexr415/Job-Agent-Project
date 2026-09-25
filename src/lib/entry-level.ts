@@ -52,6 +52,10 @@ export function statedYearsOfExperience(description: string): number | null {
   return NUMBER_WORDS[word] ?? Number(word);
 }
 
+export function isEngineeringTitle(title: string): boolean {
+  return ENGINEERING.test(title);
+}
+
 export type EntryLevelReason = "title" | "years";
 
 // Why a posting counts as entry-level, or null if it doesn't.
