@@ -10,6 +10,7 @@ export interface SkillDemand {
   postings: number; // roles listing it as required or nice to have
   required: number; // roles listing it as required
   share: number; // postings / total in-scope roles
+  companies: string[]; // companies with a role asking for it, most roles first
 }
 
 export interface SkillDemandResult {
@@ -34,12 +35,14 @@ export async function computeSkillDemand(): Promise<SkillDemandResult> {
 
   const { data, error } = await supabase
     .from("postings")
-    .select("company_id, title, extracted_fields!inner(required_skills, nice_to_have_skills, years_experience)")
+    .select(
+      "company_id, title, companies(name), extracted_fields!inner(required_skills, nice_to_have_skills, years_experience)",
+    )
     .gte("last_seen_at", latestRun.started_at);
   if (error) throw error;
 
   type Fields = { required_skills: string[]; nice_to_have_skills: string[]; years_experience: number | null };
-  const roles = new Map<string, Fields>();
+  const roles = new Map<string, Fields & { company: string }>();
   for (const posting of data) {
     const fields = posting.extracted_fields as unknown as Fields;
     if (fields.years_experience !== null && fields.years_experience > MAX_YEARS) continue;
@@ -47,6 +50,7 @@ export async function computeSkillDemand(): Promise<SkillDemandResult> {
     const existing = roles.get(key);
     // Merge duplicates' skills in case the copies were extracted slightly differently.
     roles.set(key, {
+      company: (posting.companies as unknown as { name: string } | null)?.name ?? "Unknown",
       required_skills: [...(existing?.required_skills ?? []), ...fields.required_skills],
       nice_to_have_skills: [...(existing?.nice_to_have_skills ?? []), ...fields.nice_to_have_skills],
       years_experience: fields.years_experience,
@@ -54,24 +58,30 @@ export async function computeSkillDemand(): Promise<SkillDemandResult> {
   }
   const inScope = [...roles.values()];
 
-  const counts = new Map<string, { names: Map<string, number>; postings: number; required: number }>();
+  const counts = new Map<
+    string,
+    { names: Map<string, number>; companies: Map<string, number>; postings: number; required: number }
+  >();
   for (const fields of inScope) {
     const required = new Set(canonicalSkills(fields.required_skills).map(skillKey));
     const all = canonicalSkills([...fields.required_skills, ...fields.nice_to_have_skills]);
     for (const skill of all) {
       const key = skillKey(skill);
-      const entry = counts.get(key) ?? { names: new Map(), postings: 0, required: 0 };
+      const entry = counts.get(key) ?? { names: new Map(), companies: new Map(), postings: 0, required: 0 };
       entry.names.set(skill, (entry.names.get(skill) ?? 0) + 1);
+      entry.companies.set(fields.company, (entry.companies.get(fields.company) ?? 0) + 1);
       entry.postings++;
       if (required.has(key)) entry.required++;
       counts.set(key, entry);
     }
   }
 
+  const byCount = (m: Map<string, number>) => [...m.entries()].sort((a, b) => b[1] - a[1]).map(([name]) => name);
   const skills = [...counts.values()]
     .map((entry) => ({
       // Show the most common spelling, e.g. "Frontend Development" over "Frontend development".
-      skill: [...entry.names.entries()].sort((a, b) => b[1] - a[1])[0][0],
+      skill: byCount(entry.names)[0],
+      companies: byCount(entry.companies),
       postings: entry.postings,
       required: entry.required,
       share: entry.postings / inScope.length,
