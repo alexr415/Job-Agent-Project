@@ -5,6 +5,21 @@ import { supabase } from "./supabase";
 // the LLM extraction (more reliable than the regex used at ingestion).
 const MAX_YEARS = 2;
 
+// The most recent run whose ingestion finished. Postings it didn't see have
+// closed. Uses postings_fetched rather than status, because a pipeline run is
+// only marked succeeded after its last stage (the report) finishes.
+export async function latestIngestedRun(): Promise<{ id: number; started_at: string }> {
+  const { data, error } = await supabase
+    .from("runs")
+    .select("id, started_at")
+    .gt("postings_fetched", 0)
+    .order("started_at", { ascending: false })
+    .limit(1)
+    .single();
+  if (error) throw error;
+  return data;
+}
+
 export interface SkillDemand {
   skill: string;
   postings: number; // roles listing it as required or nice to have
@@ -19,19 +34,12 @@ export interface SkillDemandResult {
 }
 
 // Counts how many in-scope roles ask for each skill. In scope means still
-// open (seen by the latest successful ingestion run) and asking for
+// open (seen by the latest run whose ingestion finished) and asking for
 // <= MAX_YEARS years of experience. Companies often post the same role once
 // per location, so postings with the same company and title count as one
 // role; otherwise one company's boilerplate would dominate the counts.
 export async function computeSkillDemand(): Promise<SkillDemandResult> {
-  const { data: latestRun, error: runError } = await supabase
-    .from("runs")
-    .select("started_at")
-    .eq("status", "succeeded")
-    .order("started_at", { ascending: false })
-    .limit(1)
-    .single();
-  if (runError) throw runError;
+  const latestRun = await latestIngestedRun();
 
   const { data, error } = await supabase
     .from("postings")

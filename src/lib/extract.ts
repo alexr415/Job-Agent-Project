@@ -151,6 +151,7 @@ ${posting.description}
 export interface ExtractionRunResult {
   attempted: number;
   succeeded: number;
+  remaining: number; // pending postings left for the next run because the deadline hit
   failures: { postingId: number; title: string; error: string }[];
   inputTokens: number;
   outputTokens: number;
@@ -160,8 +161,10 @@ export interface ExtractionRunResult {
 const MAX_ATTEMPTS = 3;
 
 // Extracts every posting that doesn't have an extracted_fields row yet, so
-// re-running only processes what's new or previously failed.
-export async function runExtraction(options: { limit?: number } = {}): Promise<ExtractionRunResult> {
+// re-running only processes what's new or previously failed. With a deadline
+// (epoch ms), it stops starting new batches once the deadline passes and
+// leaves the rest for the next run.
+export async function runExtraction(options: { limit?: number; deadline?: number } = {}): Promise<ExtractionRunResult> {
   let query = supabase
     .from("postings")
     .select("id, title, location, description, companies(name), extracted_fields!left(posting_id)")
@@ -173,8 +176,9 @@ export async function runExtraction(options: { limit?: number } = {}): Promise<E
   const pending = data as unknown as PostingToExtract[];
 
   const result: ExtractionRunResult = {
-    attempted: pending.length,
+    attempted: 0,
     succeeded: 0,
+    remaining: 0,
     failures: [],
     inputTokens: 0,
     outputTokens: 0,
@@ -208,7 +212,13 @@ export async function runExtraction(options: { limit?: number } = {}): Promise<E
 
   const CONCURRENCY = 5;
   for (let i = 0; i < pending.length; i += CONCURRENCY) {
-    await Promise.all(pending.slice(i, i + CONCURRENCY).map(processOne));
+    if (options.deadline && Date.now() > options.deadline) {
+      result.remaining = pending.length - i;
+      break;
+    }
+    const batch = pending.slice(i, i + CONCURRENCY);
+    result.attempted += batch.length;
+    await Promise.all(batch.map(processOne));
   }
 
   result.costUsd =

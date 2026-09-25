@@ -16,6 +16,7 @@ async function main() {
   for (const f of result.failures) console.log(`✗ posting ${f.postingId} (${f.title}): ${f.error}`);
   console.log(
     `Extracted ${result.succeeded}/${result.attempted} postings. ` +
+      (result.remaining ? `${result.remaining} left for next run. ` : "") +
       `Tokens: ${result.inputTokens} in, ${result.outputTokens} out. Cost: $${result.costUsd.toFixed(4)}`,
   );
   if (result.failures.length) process.exit(1);

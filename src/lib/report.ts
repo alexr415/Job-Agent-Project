@@ -1,5 +1,5 @@
 import { anthropic, REASONING_MODEL } from "./anthropic";
-import { computeGapAnalysis, type SkillDemand } from "./analysis";
+import { computeGapAnalysis, latestIngestedRun, type SkillDemand } from "./analysis";
 import { skillKey } from "./skills";
 import { supabase } from "./supabase";
 
@@ -10,6 +10,7 @@ const OUTPUT_COST_PER_MTOK = 10;
 // What gets saved in reports.data, so the next report can compute trends.
 interface ReportData {
   totalRoles: number;
+  companies?: string[]; // companies with in-scope roles; missing on reports before this field existed
   skills: { skill: string; share: number; postings: number; required: number }[];
 }
 
@@ -24,6 +25,8 @@ Three or four sentences: where the engineer stands, and the single most valuable
 
 ## What the market wants
 The 8 or so most in-demand skills. For each: its share of roles, how many roles require it (versus listing it as nice to have), which companies ask for it, and whether the engineer has it. If trend data exists, call out notable rises and drops. If this is the first report, say trends will appear after the next run.
+
+Changes since the last report come from two sources: the market itself, and companies being added to the watchlist. Check companies_new_since_last_report. If new companies were added, attribute shifts they could explain to them (a new company with many C++ roles raises C++'s share without the market changing), and only call something a market trend if it isn't explained by the new companies. If the new companies are unknown, say trends are unreliable for that reason.
 
 ## Your biggest gaps
 The gaps worth closing, in priority order. Weigh how often a skill is required (not just mentioned), how many different companies want it, and how quickly someone with this background could credibly learn it. Say briefly why each one ranks where it does. Point out any listed gap that is weaker than it looks (for example, only nice to have, or mostly from one company).
@@ -54,17 +57,19 @@ export interface GeneratedReport {
 }
 
 // Builds the gap analysis, asks Claude Sonnet to turn it into a report, and
-// stores the result in `reports` tied to the latest successful run.
-export async function generateReport(): Promise<GeneratedReport> {
+// stores the result in `reports`, tied to the given run or the latest ingested one.
+export async function generateReport(options: { runId?: number } = {}): Promise<GeneratedReport> {
   const analysis = await computeGapAnalysis();
   if (analysis.resumeSkills.length === 0) throw new Error("resume_skills is empty; run `npm run resume` first");
   const onResume = new Set(analysis.resumeSkills.map(skillKey));
 
-  const [{ data: latestRun, error: runError }, { data: previous, error: previousError }] = await Promise.all([
-    supabase.from("runs").select("id").eq("status", "succeeded").order("started_at", { ascending: false }).limit(1).single(),
-    supabase.from("reports").select("created_at, data").order("created_at", { ascending: false }).limit(1).maybeSingle(),
-  ]);
-  if (runError) throw runError;
+  const runId = options.runId ?? (await latestIngestedRun()).id;
+  const { data: previous, error: previousError } = await supabase
+    .from("reports")
+    .select("created_at, data")
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
   if (previousError) throw previousError;
 
   const previousData = previous?.data as ReportData | null | undefined;
@@ -87,12 +92,18 @@ export async function generateReport(): Promise<GeneratedReport> {
     };
   };
 
-  const companyCount = new Set(analysis.skills.flatMap((s) => s.companies)).size;
+  const companies = [...new Set(analysis.skills.flatMap((s) => s.companies))].sort();
+  const newCompanies = previousData
+    ? previousData.companies
+      ? companies.filter((c) => !previousData.companies!.includes(c))
+      : "unknown (the previous report didn't record its companies)"
+    : null;
   const promptData = {
     date: new Date().toISOString().slice(0, 10),
     open_roles: analysis.totalPostings,
-    companies_with_roles: companyCount,
+    companies_with_roles: companies.length,
     previous_report_date: previous?.created_at.slice(0, 10) ?? null,
+    companies_new_since_last_report: newCompanies,
     top_skills: analysis.skills.slice(0, 30).map(describe),
     gaps: analysis.gaps.slice(0, 15).map(describe),
     resume_skills: analysis.resumeSkills,
@@ -124,13 +135,14 @@ export async function generateReport(): Promise<GeneratedReport> {
 
   const data: ReportData = {
     totalRoles: analysis.totalPostings,
+    companies,
     skills: analysis.skills
       .slice(0, 100)
       .map(({ skill, share, postings, required }) => ({ skill, share, postings, required })),
   };
   const { data: saved, error: saveError } = await supabase
     .from("reports")
-    .insert({ run_id: latestRun.id, model: REASONING_MODEL, content_md: contentMd, data })
+    .insert({ run_id: runId, model: REASONING_MODEL, content_md: contentMd, data })
     .select("id")
     .single();
   if (saveError) throw saveError;

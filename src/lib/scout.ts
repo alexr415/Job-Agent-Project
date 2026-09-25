@@ -103,8 +103,9 @@ export interface ScoutResult {
 }
 
 // Runs the scout agent: Claude decides which tool to call next based on what
-// it finds, until it's done or hits a limit.
-export async function runScout(): Promise<ScoutResult> {
+// it finds, until it's done or hits a limit. With a deadline (epoch ms), it
+// stops starting new turns once the deadline passes.
+export async function runScout(options: { deadline?: number } = {}): Promise<ScoutResult> {
   const startOfDay = new Date();
   startOfDay.setUTCHours(0, 0, 0, 0);
 
@@ -207,6 +208,10 @@ export async function runScout(): Promise<ScoutResult> {
   // The agent loop: call the model, run whatever tools it asked for, send the
   // results back, and repeat until it stops asking for tools.
   while (result.turns < MAX_TURNS) {
+    if (options.deadline && Date.now() > options.deadline) {
+      result.stopReason = "time_limit";
+      break;
+    }
     result.turns++;
     const response = await anthropic.messages.create({
       model: REASONING_MODEL,

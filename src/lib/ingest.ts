@@ -86,39 +86,46 @@ async function ingestCompany(company: Company, runId: number): Promise<CompanyIn
 }
 
 // Fetches every active company's board, keeps entry-level SWE postings, and
-// records the run in `runs`. Returns per-company results for logging.
+// adds the counts to the given run. The caller owns the run's status.
+export async function ingestAll(runId: number): Promise<CompanyIngestResult[]> {
+  const { data: companies, error } = await supabase
+    .from("companies")
+    .select("id, name, slug, ats_provider")
+    .eq("active", true)
+    .order("name");
+  if (error) throw error;
+
+  // A few boards at a time: fast, without hammering any one API.
+  const results: CompanyIngestResult[] = [];
+  const CONCURRENCY = 5;
+  for (let i = 0; i < companies.length; i += CONCURRENCY) {
+    const batch = companies.slice(i, i + CONCURRENCY) as Company[];
+    results.push(...(await Promise.all(batch.map((c) => ingestCompany(c, runId)))));
+  }
+
+  const failures = results.filter((r) => r.error);
+  const { error: updateError } = await supabase
+    .from("runs")
+    .update({
+      postings_fetched: results.reduce((sum, r) => sum + r.entryLevel, 0),
+      postings_new: results.reduce((sum, r) => sum + r.new, 0),
+      error: failures.length ? failures.map((r) => `${r.company}: ${r.error}`).join("\n") : null,
+    })
+    .eq("id", runId);
+  if (updateError) throw updateError;
+
+  return results;
+}
+
+// Standalone ingestion (`npm run ingest`): creates its own run and records
+// whether it succeeded.
 export async function runIngestion(): Promise<{ runId: number; results: CompanyIngestResult[] }> {
   const { data: run, error: runError } = await supabase.from("runs").insert({}).select("id").single();
   if (runError) throw runError;
 
   try {
-    const { data: companies, error } = await supabase
-      .from("companies")
-      .select("id, name, slug, ats_provider")
-      .eq("active", true)
-      .order("name");
-    if (error) throw error;
-
-    // A few boards at a time: fast, without hammering any one API.
-    const results: CompanyIngestResult[] = [];
-    const CONCURRENCY = 5;
-    for (let i = 0; i < companies.length; i += CONCURRENCY) {
-      const batch = companies.slice(i, i + CONCURRENCY) as Company[];
-      results.push(...(await Promise.all(batch.map((c) => ingestCompany(c, run.id)))));
-    }
-
-    const failures = results.filter((r) => r.error);
-    await supabase
-      .from("runs")
-      .update({
-        finished_at: new Date().toISOString(),
-        status: "succeeded",
-        postings_fetched: results.reduce((sum, r) => sum + r.entryLevel, 0),
-        postings_new: results.reduce((sum, r) => sum + r.new, 0),
-        error: failures.length ? failures.map((r) => `${r.company}: ${r.error}`).join("\n") : null,
-      })
-      .eq("id", run.id);
-
+    const results = await ingestAll(run.id);
+    await supabase.from("runs").update({ finished_at: new Date().toISOString(), status: "succeeded" }).eq("id", run.id);
     return { runId: run.id, results };
   } catch (err) {
     await supabase
